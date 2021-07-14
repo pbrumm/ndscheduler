@@ -13,16 +13,15 @@ will raise an exception.
 import importlib
 import logging
 import sys
-
-import confuse
+import os
 import argparse
 from pathlib import Path
-from os import environ
-import bcrypt
 from getpass import getpass
 from time import sleep
 import pkg_resources
 
+import bcrypt
+import confuse
 from ndscheduler import default_settings
 
 
@@ -40,8 +39,8 @@ _settings_module = None
 # Define functions for automated tests
 def setup_package():
     global _settings_module
-    _settings_module = environ.get(ENVIRONMENT_VARIABLE)
-    environ[ENVIRONMENT_VARIABLE] = "ndscheduler.default_settings_test"
+    _settings_module = os.environ.get(ENVIRONMENT_VARIABLE)
+    os.environ[ENVIRONMENT_VARIABLE] = "ndscheduler.default_settings_test"
     # Re-initialize settings
     global settings
     settings.__init__()
@@ -50,13 +49,22 @@ def setup_package():
 def teardown_package():
     global _settings_module
     if _settings_module:
-        environ[ENVIRONMENT_VARIABLE] = _settings_module
+        os.environ[ENVIRONMENT_VARIABLE] = _settings_module
     # Re-initialize settings
     global settings
     settings.__init__()
 
 
 def get_cli_args():
+    prog = os.path.basename(sys.argv[0])
+    prefix = ""
+    if prog == "-m":
+        prog = __name__
+        prefix = "submodule: "
+    try:
+        version = f"{prefix}{prog} version {pkg_resources.get_distribution(prog).version}"
+    except (pkg_resources.DistributionNotFound, pkg_resources.RequirementParseError):
+        version = f"{prog} <version unknown>"
     parser = argparse.ArgumentParser(description="NDscheduler - web based cron replacement", add_help=False,)
     parser.add_argument(
         "--http-port",
@@ -91,7 +99,7 @@ def get_cli_args():
         "-V",
         action="version",
         help="Show version",
-        version=f"%(prog)s fla{pkg_resources.get_distribution('construct').version}",
+        version=version,
     )
 
     args, _ = parser.parse_known_args()
@@ -119,20 +127,20 @@ def get_cli_args():
         del args.encrypt
 
     try:
-        logger.setLevel(logging._nameToLevel[args.LOGGING_LEVEL.upper()])
+        logger.setLevel(getattr(logging, args.LOGGING_LEVEL.upper()))
     except KeyError as e:
-        logger.error(f"Unknown logging level: {e.args[0]}")
+        logger.error("Unknown logging level: %s", e.args[0])
         # continue with default logging level
     except AttributeError:
         pass
 
-    logger.debug(f"Command line arguments: {args}")
+    logger.debug("Command line arguments: %s", args)
 
     return args, parser
 
 
 def load_yaml_config(
-    config_file=None, args=None, yaml_extras={}, app_name="ndscheduler", default_config=__name__,
+    config_file=None, args=None, yaml_extras=None, app_name="ndscheduler", default_config=__name__,
 ):
     # Load config values from YAML file
 
@@ -206,7 +214,8 @@ def load_yaml_config(
         "LDAP_USERS": confuse.StrSeq(default=[]),
     }
 
-    yaml_template.update(yaml_extras)
+    if yaml_extras is not None:
+        yaml_template.update(yaml_extras)
 
     db_classes = {
         "sqlite": "ndscheduler.corescheduler.datastore.providers.sqlite.DatastoreSqlite",
@@ -215,7 +224,11 @@ def load_yaml_config(
     }
 
     yaml_config = confuse.LazyConfig(app_name, default_config)
-    logger.debug(f"Loading configuration from YAML config file, dir:{yaml_config.config_dir()}, file:{config_file}, ")
+    logger.debug(
+        "Loading configuration from YAML config file, dir: %s, file: %s",
+        yaml_config.config_dir(),
+        config_file
+    )
     if config_file:
         if Path(config_file).is_file():
             yaml_config.set_file(config_file)
@@ -223,7 +236,7 @@ def load_yaml_config(
             config_file = Path(yaml_config.config_dir()).joinpath(config_file)
             yaml_config.set_file(config_file)
         else:
-            logger.error(f"Config file '{config_file}' doesn't exist.")
+            logger.error("Config file '%s' doesn't exist.", config_file)
             exit(1)
     else:
         # default config file location
@@ -235,7 +248,7 @@ def load_yaml_config(
     if args:
         yaml_config.set_args(args, dots=True)
 
-    logger.info(f"Loaded YAML configuration: {config_file}")
+    logger.info("Loaded YAML configuration: %s", config_file)
 
     # Authentication is optional
     if "AUTH_CREDENTIALS" not in yaml_config:
@@ -244,16 +257,21 @@ def load_yaml_config(
     try:
         valid = yaml_config.get(yaml_template)
     except (confuse.NotFoundError, confuse.ConfigValueError) as e:
-        logger.error(f"Value {e} in config file: {yaml_config.config_dir()}/" f"{confuse.CONFIG_FILENAME}")
+        logger.error(
+            "Value %s in config file: %s/%s",
+            e,
+            yaml_config.config_dir(),
+            confuse.CONFIG_FILENAME,
+        )
         exit(1)
 
     try:
-        logger.setLevel(logging._nameToLevel[valid["LOGGING_LEVEL"].upper()])
+        logger.setLevel(getattr(logging, valid["LOGGING_LEVEL"].upper()))
     except KeyError as e:
-        logger.error(f"Unknown logging level: {e.args[0]}")
+        logger.error("Unknown logging level: %s", e.args[0])
         # continue with default logging level
 
-    logger.debug(f"YAML config: {valid}")
+    logger.debug("YAML config: %s", valid)
     # set database class type
     valid["DATABASE_CLASS"] = db_classes[valid["DATABASE_CLASS"]]
 
@@ -276,14 +294,14 @@ class Settings(object):
             cls._instance = super(Settings, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         """Instantiate the settings."""
 
         # get command line arguments
         args, parser = get_cli_args()
 
         # Legacy config mode uses environment variable
-        if ENVIRONMENT_VARIABLE in environ or args.NDSCHEDULER_SETTINGS_MODULE:
+        if ENVIRONMENT_VARIABLE in os.environ or args.NDSCHEDULER_SETTINGS_MODULE:
             # update this dict from default settings (but only for ALL_CAPS
             # settings)
             for setting in dir(default_settings):
@@ -295,8 +313,8 @@ class Settings(object):
                 if args.NDSCHEDULER_SETTINGS_MODULE:
                     settings_module_path = args.NDSCHEDULER_SETTINGS_MODULE
                 else:
-                    settings_module_path = environ[ENVIRONMENT_VARIABLE]
-                logger.debug(f"Import settings module {settings_module_path}")
+                    settings_module_path = os.environ[ENVIRONMENT_VARIABLE]
+                logger.debug("Import settings module %s", settings_module_path)
                 try:
                     settings_module = importlib.import_module(settings_module_path)
                     for setting in dir(settings_module):
@@ -305,14 +323,17 @@ class Settings(object):
                             setattr(self, setting, setting_value)
                 except ImportError as e:
                     error = ImportError(
-                        'Could not import settings "%s" (Is it on sys.path?): %s' % (settings_module_path, e)
+                        'Could not import settings "%s" (Is it on sys.path?): %s',
+                        settings_module_path,
+                        e,
                     )
                     logger.warning(error)
             except KeyError:
                 # NOTE: This is arguably an EnvironmentError, but that causes
                 # problems with Python's interactive help.
                 logger.warning(
-                    ("Environment variable %s is undefined. " "Use default settings for now.") % ENVIRONMENT_VARIABLE
+                    ("Environment variable %s is undefined. " "Use default settings for now."),
+                    ENVIRONMENT_VARIABLE,
                 )
             if settings_module and hasattr(settings_module, "extra_parser"):
                 parents = [parser, getattr(settings_module, "extra_parser")]
@@ -350,4 +371,4 @@ class Settings(object):
 # Instantiate the settings globally.
 settings = Settings()
 
-logger.debug(f"Settings: {settings.__dict__}")
+logger.debug("Settings: %s", settings.__dict__)
