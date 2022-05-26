@@ -7,7 +7,6 @@ subclassed in the rest of the app for different URLs.
 import logging
 import json
 import bcrypt
-import ldap
 
 from concurrent import futures
 
@@ -74,9 +73,7 @@ class LoginHandler(BaseHandler):
         password = self.get_argument("password")
         hashed = self.auth_credentials.get(username)
         logger.debug(f"Received login for user '{username}'")
-        if settings.LDAP_SERVER and self.ldap_login(username, password):
-            self.set_user_cookie(username)
-        elif hashed is not None and bcrypt.checkpw(password.encode(), hashed.encode()):
+        if hashed is not None and bcrypt.checkpw(password.encode(), hashed.encode()):
             logger.debug("Try local authentication")
             self.set_user_cookie(username)
         else:
@@ -89,57 +86,6 @@ class LoginHandler(BaseHandler):
         # 1min = 0.000694444 days
         self.set_secure_cookie(settings.COOKIE_NAME, username, expires_days=settings.COOKIE_MAX_AGE)
         logger.debug(f"Set cookie for user {username}, expires: {settings.COOKIE_MAX_AGE * 1440} minutes")
-
-    def ldap_login(self, username, password):
-        """Verifies credentials for username and password.
-
-        Parameters
-        ----------
-        username : str
-            User ID (uid) to be used for login
-        password : str
-            User password
-
-        Returns
-        -------
-        bool
-            True if login was successful
-        """
-        if settings.LDAP_USERS and username not in settings.LDAP_USERS:
-            logging.warning(f"User {username} not allowed for LDAP login")
-            return False
-        LDAP_SERVER = settings.LDAP_SERVER
-        # Create fully qualified DN for user
-        LDAP_DN = settings.LDAP_LOGIN_DN.replace("{username}", username)
-        logger.debug(f"LDAP dn: {LDAP_DN}")
-        # disable certificate check
-        ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
-
-        # specify certificate dir or file
-        if settings.LDAP_CERT_DIR:
-            ldap.set_option(ldap.OPT_X_TLS_CACERTDIR, settings.LDAP_CERT_DIR)
-        if settings.LDAP_CERT_FILE:
-            ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, settings.LDAP_CERT_FILE)
-        try:
-            # build a client
-            ldap_client = ldap.initialize(LDAP_SERVER)
-            ldap_client.set_option(ldap.OPT_REFERRALS, 0)
-            # perform a synchronous bind to test authentication
-            ldap_client.simple_bind_s(LDAP_DN, password)
-            logger.info(f"User '{username}' successfully authenticated via LDAP")
-            ldap_client.unbind_s()
-            return True
-        except (ldap.INVALID_CREDENTIALS, ldap.NO_SUCH_OBJECT):
-            ldap_client.unbind()
-            logger.warning("LDAP: wrong username or password")
-        except ldap.SERVER_DOWN:
-            logger.warning("LDAP server not available")
-        except ldap.LDAPError as e:
-            if isinstance(e, dict) and "desc" in e:
-                logger.warning(f"LDAP error: {e['desc']}")
-            else:
-                logger.warning(f"LDAP error: {e}")
-        return False
 
 
 class LogoutHandler(BaseHandler):
