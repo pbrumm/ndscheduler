@@ -53,6 +53,7 @@ class SchedulerServer:
         URLS = [
             # Index page
             (r"/", index.Handler),
+            (r"/health", health.Handler),
             (r"/login", base.LoginHandler),
             (r"/logout", base.LogoutHandler),
             (r"/passwd", passwd.Handler),
