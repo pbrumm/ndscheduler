@@ -18,4 +18,4 @@ class Handler(base.BaseHandler):
     """Index page request handler."""
 
     def get(self):
-        return "ok";
+        self.write("ok");
